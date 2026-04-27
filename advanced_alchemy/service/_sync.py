@@ -9,7 +9,7 @@ should be a SQLAlchemy model.
 from collections.abc import Generator, Iterable, Sequence
 from contextlib import contextmanager
 from functools import cached_property
-from typing import Any, ClassVar, Generic, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, List, Optional, TypeVar, Union, cast
 
 from sqlalchemy import Select
 from sqlalchemy import inspect as sa_inspect
@@ -23,9 +23,10 @@ from advanced_alchemy.base import ModelProtocol, model_to_dict
 from advanced_alchemy.config.sync import SQLAlchemySyncConfig
 from advanced_alchemy.exceptions import AdvancedAlchemyError, ErrorMessages, ImproperConfigurationError, RepositoryError
 from advanced_alchemy.filters import StatementFilter
-from advanced_alchemy.repository import SQLAlchemySyncQueryRepository
+from advanced_alchemy.repository import SQLAlchemySyncQueryRepository, SQLAlchemySyncSlugRepositoryProtocol
 from advanced_alchemy.repository._util import LoadSpec, model_from_dict
 from advanced_alchemy.repository.typing import MISSING, ModelT, OrderingPair, PrimaryKeyType, SQLAlchemySyncRepositoryT
+from advanced_alchemy.service._typing import ModelWithSlug
 from advanced_alchemy.service._util import ResultConverter
 from advanced_alchemy.utils.dataclass import Empty, EmptyType
 from advanced_alchemy.utils.deprecation import warn_deprecation
@@ -38,11 +39,14 @@ from advanced_alchemy.utils.serializers import (
     attrs_nothing,
     is_attrs_instance,
     is_dict,
+    is_dict_without_field,
     is_dto_data,
     is_msgspec_struct,
     is_pydantic_model,
     is_sqlmodel_table_model,
 )
+
+S = TypeVar("S")
 
 
 class SQLAlchemySyncQueryService(ResultConverter):
@@ -1425,3 +1429,131 @@ class SQLAlchemySyncRepositoryService(
                 **kwargs,
             ),
         )
+
+
+class SyncCompositeServiceMixin:
+    """Lazy child-service access on a shared session.
+
+    This mixin allows a service to orchestrate multiple child services
+    sharing the same underlying database session. Child services are
+    instantiated lazily and cached on the instance.
+
+    Example:
+        .. code-block:: python
+
+            class MyService(
+                AsyncCompositeServiceMixin,
+                SQLAlchemyAsyncRepositoryService[MyModel],
+            ):
+                @property
+                def other_service(self) -> OtherService:
+                    return self._get_service(OtherService)
+    """
+
+    if TYPE_CHECKING:
+
+        @property
+        def repository(self) -> Any: ...
+
+    _service_cache: dict[type, Any]
+    """Internal cache for instantiated child services."""
+
+    def _get_service(self, service_cls: type[S]) -> S:
+        """Get or create a child service instance sharing the current session.
+
+        Args:
+            service_cls: The service class to instantiate.
+
+        Returns:
+            The instantiated service.
+        """
+        try:
+            cache = self._service_cache
+        except AttributeError:
+            cache = self.__dict__.setdefault("_service_cache", {})
+
+        if service_cls not in cache:
+            # We assume the service_cls accepts a 'session' keyword argument.
+            # This is true for all SQLAlchemyAsyncRepositoryService and
+            # SQLAlchemySyncRepositoryService subclasses.
+            cache[service_cls] = service_cls(session=self.repository.session)  # type: ignore[call-arg]
+        return cache[service_cls]  # type: ignore[no-any-return]
+
+
+class SyncAutoSlugServiceMixin(Generic[ModelT]):
+    """Mixin to automatically generate slugs for models.
+
+    This mixin overrides the `to_model_on_create`, `to_model_on_update`,
+    and `to_model_on_upsert` hooks to automatically generate a slug
+    if one is not provided.
+
+    Example:
+        .. code-block:: python
+
+            class MyService(
+                AsyncAutoSlugServiceMixin[MyModel],
+                SQLAlchemyAsyncRepositoryService[MyModel],
+            ):
+                class Repo(SQLAlchemyAsyncSlugRepository[MyModel]): ...
+
+                repository_type = Repo
+    """
+
+    if TYPE_CHECKING:
+
+        @property
+        def repository(self) -> SQLAlchemySyncSlugRepositoryProtocol[ModelT]: ...
+
+    def to_model_on_create(self, data: "ModelDictT[ModelT]") -> "ModelDictT[ModelT]":
+        """Handle slug generation on create.
+
+        Args:
+            data: The data to create the model from.
+
+        Returns:
+            The created model instance.
+        """
+        data = super().to_model_on_create(data)  # type: ignore[misc]
+        if is_dict(data) and is_dict_without_field(data, "slug"):
+            source = data.get("name") or data.get("title") or str(data)
+            data["slug"] = self.repository.get_available_slug(str(source))
+        elif isinstance(data, ModelWithSlug) and not data.slug:
+            source = getattr(data, "name", getattr(data, "title", str(data)))
+            data.slug = self.repository.get_available_slug(str(source))
+        return cast("ModelDictT[ModelT]", data)
+
+    def to_model_on_update(self, data: "ModelDictT[ModelT]") -> "ModelDictT[ModelT]":
+        """Handle slug generation on update.
+
+        Args:
+            data: The data to update the model from.
+
+        Returns:
+            The updated model instance.
+        """
+        data = super().to_model_on_update(data)  # type: ignore[misc]
+        if is_dict(data) and is_dict_without_field(data, "slug"):
+            source = data.get("name") or data.get("title") or str(data)
+            data["slug"] = self.repository.get_available_slug(str(source))
+        elif isinstance(data, ModelWithSlug) and not data.slug:
+            source = getattr(data, "name", getattr(data, "title", str(data)))
+            data.slug = self.repository.get_available_slug(str(source))
+        return cast("ModelDictT[ModelT]", data)
+
+    def to_model_on_upsert(self, data: "ModelDictT[ModelT]") -> "ModelDictT[ModelT]":
+        """Handle slug generation on upsert.
+
+        Args:
+            data: The data to upsert the model from.
+
+        Returns:
+            The upserted model instance.
+        """
+        data = super().to_model_on_upsert(data)  # type: ignore[misc]
+        if is_dict(data) and is_dict_without_field(data, "slug"):
+            source = data.get("name") or data.get("title") or str(data)
+            data["slug"] = self.repository.get_available_slug(str(source))
+        elif isinstance(data, ModelWithSlug) and not data.slug:
+            source = getattr(data, "name", getattr(data, "title", str(data)))
+            data.slug = self.repository.get_available_slug(str(source))
+        return cast("ModelDictT[ModelT]", data)

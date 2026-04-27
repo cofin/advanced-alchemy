@@ -10,6 +10,8 @@ from advanced_alchemy.repository import (
     model_from_dict,
 )
 from advanced_alchemy.service._async import (
+    AsyncAutoSlugServiceMixin,
+    AsyncCompositeServiceMixin,
     SQLAlchemyAsyncQueryService,
     SQLAlchemyAsyncRepositoryReadService,
     SQLAlchemyAsyncRepositoryService,
@@ -18,6 +20,8 @@ from advanced_alchemy.service._sync import (
     SQLAlchemySyncQueryService,
     SQLAlchemySyncRepositoryReadService,
     SQLAlchemySyncRepositoryService,
+    SyncAutoSlugServiceMixin,
+    SyncCompositeServiceMixin,
 )
 from advanced_alchemy.service._typing import (
     ServiceWithSession,
@@ -72,6 +76,8 @@ from advanced_alchemy.utils.serializers import (
 
 __all__ = (
     "DEFAULT_ERROR_MESSAGE_TEMPLATES",
+    "AsyncAutoSlugServiceMixin",
+    "AsyncCompositeServiceMixin",
     "AttrsInstance",
     "BulkModelDictT",
     "Empty",
@@ -102,6 +108,8 @@ __all__ = (
     "SQLAlchemySyncServiceProvider",
     "ServiceWithSession",
     "SupportedSchemaModel",
+    "SyncAutoSlugServiceMixin",
+    "SyncCompositeServiceMixin",
     "compose_async_services",
     "compose_sync_services",
     "fields",

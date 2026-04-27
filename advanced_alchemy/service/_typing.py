@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 __all__ = (
+    "ModelWithSlug",
     "SQLAlchemyAsyncServiceCompositionInput",
     "SQLAlchemyAsyncServiceProvider",
     "SQLAlchemySyncServiceCompositionInput",
@@ -18,6 +19,14 @@ __all__ = (
 )
 
 T = TypeVar("T")
+
+
+@runtime_checkable
+class ModelWithSlug(Protocol):
+    """Protocol for models with a slug attribute."""
+
+    slug: str
+
 
 SQLAlchemyAsyncServiceProvider: TypeAlias = Callable[["AsyncSession"], AsyncGenerator[T, None]]
 """Callable that yields a service instance for a session."""
