@@ -1,79 +1,105 @@
-"""Static typing assertions for service composition primitives."""
-
-from collections.abc import AsyncGenerator
+from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING
+from unittest.mock import MagicMock
 
+import pytest
 from typing_extensions import assert_type
 
-from advanced_alchemy.service import ServiceComposition
+from advanced_alchemy.base import BigIntBase
+from advanced_alchemy.repository import SQLAlchemyAsyncRepository
+from advanced_alchemy.service import (
+    SQLAlchemyAsyncRepositoryService,
+    provide_async_services,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class S1:
-    pass
+@pytest.fixture
+def mock_async_session() -> MagicMock:
+    return MagicMock()
 
 
-class S2:
-    pass
+class Model(BigIntBase):
+    __tablename__ = "test_model"
 
 
-class S3:
-    pass
+class S1(SQLAlchemyAsyncRepositoryService[Model]):
+    class Repo(SQLAlchemyAsyncRepository[Model]):
+        model_type = Model
+
+    repository_type = Repo
 
 
-class S4:
-    pass
+class S2(SQLAlchemyAsyncRepositoryService[Model]):
+    class Repo(SQLAlchemyAsyncRepository[Model]):
+        model_type = Model
+
+    repository_type = Repo
 
 
-class S5:
-    pass
+class S3(SQLAlchemyAsyncRepositoryService[Model]):
+    class Repo(SQLAlchemyAsyncRepository[Model]):
+        model_type = Model
+
+    repository_type = Repo
 
 
-class S6:
-    pass
+class S4(SQLAlchemyAsyncRepositoryService[Model]):
+    class Repo(SQLAlchemyAsyncRepository[Model]):
+        model_type = Model
+
+    repository_type = Repo
 
 
-class S7:
-    pass
+class S5(SQLAlchemyAsyncRepositoryService[Model]):
+    class Repo(SQLAlchemyAsyncRepository[Model]):
+        model_type = Model
+
+    repository_type = Repo
 
 
-class S8:
-    pass
+class S6(SQLAlchemyAsyncRepositoryService[Model]):
+    class Repo(SQLAlchemyAsyncRepository[Model]):
+        model_type = Model
+
+    repository_type = Repo
 
 
-def p1(session: "AsyncSession") -> AsyncGenerator[S1, None]: ...  # type: ignore[empty-body]
+class S7(SQLAlchemyAsyncRepositoryService[Model]):
+    class Repo(SQLAlchemyAsyncRepository[Model]):
+        model_type = Model
+
+    repository_type = Repo
 
 
-def p2(session: "AsyncSession") -> AsyncGenerator[S2, None]: ...  # type: ignore[empty-body]
+class S8(SQLAlchemyAsyncRepositoryService[Model]):
+    class Repo(SQLAlchemyAsyncRepository[Model]):
+        model_type = Model
+
+    repository_type = Repo
 
 
-def p3(session: "AsyncSession") -> AsyncGenerator[S3, None]: ...  # type: ignore[empty-body]
+class S9(SQLAlchemyAsyncRepositoryService[Model]):
+    class Repo(SQLAlchemyAsyncRepository[Model]):
+        model_type = Model
+
+    repository_type = Repo
 
 
-def p4(session: "AsyncSession") -> AsyncGenerator[S4, None]: ...  # type: ignore[empty-body]
+class S10(SQLAlchemyAsyncRepositoryService[Model]):
+    class Repo(SQLAlchemyAsyncRepository[Model]):
+        model_type = Model
+
+    repository_type = Repo
 
 
-def p5(session: "AsyncSession") -> AsyncGenerator[S5, None]: ...  # type: ignore[empty-body]
+async def test_provide_services_typing(mock_async_session: "AsyncSession") -> None:
+    # 2-tuple overload
+    res2 = provide_async_services(S1, S2, session=mock_async_session)
+    assert_type(res2, AbstractAsyncContextManager[tuple[S1, S2]])
 
-
-def p6(session: "AsyncSession") -> AsyncGenerator[S6, None]: ...  # type: ignore[empty-body]
-
-
-def p7(session: "AsyncSession") -> AsyncGenerator[S7, None]: ...  # type: ignore[empty-body]
-
-
-def p8(session: "AsyncSession") -> AsyncGenerator[S8, None]: ...  # type: ignore[empty-body]
-
-
-def test_arity_three_typing() -> None:
-    composer = ServiceComposition.starting_with(p1).add(p2).add(p3)
-
-    assert_type(composer, ServiceComposition[S1, S2, S3])
-
-
-def test_arity_eight_typing() -> None:
-    composer = ServiceComposition.starting_with(p1).add(p2).add(p3).add(p4).add(p5).add(p6).add(p7).add(p8)
-
-    assert_type(composer, ServiceComposition[S1, S2, S3, S4, S5, S6, S7, S8])
+    # 10-tuple overload
+    async with provide_async_services(S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, session=mock_async_session) as services:
+        assert_type(services, tuple[S1, S2, S3, S4, S5, S6, S7, S8, S9, S10])

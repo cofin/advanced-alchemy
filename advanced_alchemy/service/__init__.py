@@ -19,17 +19,31 @@ from advanced_alchemy.service._sync import (
     SQLAlchemySyncRepositoryReadService,
     SQLAlchemySyncRepositoryService,
 )
-from advanced_alchemy.service._typing import ServiceProvider, ServiceWithSession
+from advanced_alchemy.service._typing import (
+    ServiceWithSession,
+    SQLAlchemyAsyncServiceCompositionInput,
+    SQLAlchemyAsyncServiceProvider,
+    SQLAlchemySyncServiceCompositionInput,
+    SQLAlchemySyncServiceProvider,
+)
 from advanced_alchemy.service._util import ResultConverter, find_filter
-from advanced_alchemy.service.composition import ServiceComposition
+from advanced_alchemy.service.composition import (
+    SQLAlchemyAsyncServiceComposition,
+    SQLAlchemySyncServiceComposition,
+    compose_async_services,
+    compose_sync_services,
+    provide_async_services,
+    provide_sync_services,
+)
 from advanced_alchemy.service.pagination import OffsetPagination
-from advanced_alchemy.typing import ATTRS_INSTALLED
 from advanced_alchemy.utils.serializers import (
     AttrsInstance,
+    BulkModelDictT,
     FilterTypeT,
     ModelDictListT,
     ModelDictT,
     ModelDTOT,
+    PydanticOrMsgspecT,
     SupportedSchemaModel,
     fields,
     is_attrs_instance,
@@ -57,9 +71,9 @@ from advanced_alchemy.utils.serializers import (
 )
 
 __all__ = (
-    "ATTRS_INSTALLED",
     "DEFAULT_ERROR_MESSAGE_TEMPLATES",
     "AttrsInstance",
+    "BulkModelDictT",
     "Empty",
     "EmptyType",
     "ErrorMessages",
@@ -72,17 +86,24 @@ __all__ = (
     "ModelT",
     "OffsetPagination",
     "OrderingPair",
+    "PydanticOrMsgspecT",
     "ResultConverter",
     "SQLAlchemyAsyncQueryService",
     "SQLAlchemyAsyncRepositoryReadService",
     "SQLAlchemyAsyncRepositoryService",
+    "SQLAlchemyAsyncServiceComposition",
+    "SQLAlchemyAsyncServiceCompositionInput",
+    "SQLAlchemyAsyncServiceProvider",
     "SQLAlchemySyncQueryService",
     "SQLAlchemySyncRepositoryReadService",
     "SQLAlchemySyncRepositoryService",
-    "ServiceComposition",
-    "ServiceProvider",
+    "SQLAlchemySyncServiceComposition",
+    "SQLAlchemySyncServiceCompositionInput",
+    "SQLAlchemySyncServiceProvider",
     "ServiceWithSession",
     "SupportedSchemaModel",
+    "compose_async_services",
+    "compose_sync_services",
     "fields",
     "find_filter",
     "is_attrs_instance",
@@ -107,5 +128,7 @@ __all__ = (
     "is_schema_without_field",
     "is_sqlmodel_table_model",
     "model_from_dict",
+    "provide_async_services",
+    "provide_sync_services",
     "schema_dump",
 )

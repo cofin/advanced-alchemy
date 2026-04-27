@@ -1,0 +1,8 @@
+{
+  "allow": [
+    "run_shell_command(bd *)",
+    "run_shell_command(make *)",
+    "run_shell_command(uv *)",
+    "run_shell_command(git *)"
+  ]
+}

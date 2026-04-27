@@ -4,6 +4,7 @@ from typing import (
     Any,
     Optional,
     Union,
+    cast,
     overload,
 )
 
@@ -20,6 +21,7 @@ from advanced_alchemy.service import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator, Sequence
+    from contextlib import AbstractAsyncContextManager
 
     from fastapi import FastAPI
     from sqlalchemy import Select
@@ -32,6 +34,7 @@ if TYPE_CHECKING:
         FilterConfig,
         SyncServiceT_co,
     )
+    from advanced_alchemy.service import SQLAlchemyAsyncServiceCompositionInput
 
 __all__ = ("AdvancedAlchemy",)
 
@@ -152,3 +155,22 @@ class AdvancedAlchemy(StarletteAdvancedAlchemy):
             dep_defaults = DEPENDENCY_DEFAULTS
 
         return _provide_filters(config, dep_defaults=dep_defaults)
+
+    def provide_services(
+        self,
+        *inputs: "SQLAlchemyAsyncServiceCompositionInput[Any]",
+        key: Optional[str] = None,
+    ) -> "AbstractAsyncContextManager[tuple[Any, ...]]":
+        """Provides a services instance for composition.
+
+        Args:
+            *inputs: The service classes or providers to provide.
+            key: Optional key for the service.
+
+        Returns:
+            An async context manager that yields a tuple of services.
+        """
+        from advanced_alchemy.extensions.fastapi.providers import provide_async_services as _provide_services
+
+        config = self.get_async_config(key)
+        return cast("AbstractAsyncContextManager[tuple[Any, ...]]", _provide_services(*inputs, config=config))

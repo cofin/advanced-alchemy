@@ -18,10 +18,14 @@ from advanced_alchemy.exceptions import ImproperConfigurationError
 from advanced_alchemy.extensions.starlette.config import SQLAlchemyAsyncConfig, SQLAlchemySyncConfig
 
 if TYPE_CHECKING:
+    from contextlib import AbstractAsyncContextManager
+
     from sqlalchemy import Engine
     from sqlalchemy.ext.asyncio import AsyncEngine
     from sqlalchemy.orm import Session
     from starlette.applications import Starlette
+
+    from advanced_alchemy.service import SQLAlchemyAsyncServiceCompositionInput
 
 
 class AdvancedAlchemy:
@@ -439,3 +443,22 @@ class AdvancedAlchemy:
             return config.get_engine()
 
         return _get_engine
+
+    def provide_services(
+        self,
+        *inputs: "SQLAlchemyAsyncServiceCompositionInput[Any]",
+        key: Optional[str] = None,
+    ) -> "AbstractAsyncContextManager[tuple[Any, ...]]":
+        """Provides a services instance for composition.
+
+        Args:
+            *inputs: The service classes or providers to provide.
+            key: Optional key for the service.
+
+        Returns:
+            An async context manager that yields a tuple of services.
+        """
+        from advanced_alchemy.extensions.starlette.providers import provide_async_services as _provide_services
+
+        config = self.get_async_config(key)
+        return cast("AbstractAsyncContextManager[tuple[Any, ...]]", _provide_services(*inputs, config=config))

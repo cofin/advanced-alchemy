@@ -153,7 +153,7 @@ def test_sqlalchemy_tablename() -> None:
         columns.
         """
 
-    class TESTModel(base.UUIDAuditBase):
+    class TESTRepositoryModel(base.UUIDAuditBase):
         """Inheriting from UUIDAuditBase gives the model 'created_at' and 'updated_at'
         columns.
         """
@@ -164,7 +164,7 @@ def test_sqlalchemy_tablename() -> None:
         """
 
     assert BigModel.__tablename__ == "big_model"
-    assert TESTModel.__tablename__ == "test_model"
+    assert TESTRepositoryModel.__tablename__ == "test_repository_model"
     assert OtherBigIntModel.__tablename__ == "other_big_int_model"
 
 

@@ -3,7 +3,7 @@
 
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager, suppress
-from typing import TYPE_CHECKING, Callable, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
 from flask import g
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,8 +17,12 @@ from advanced_alchemy.routing.context import reset_routing_context
 from advanced_alchemy.utils.portals import Portal, PortalProvider
 
 if TYPE_CHECKING:
+    from contextlib import AbstractContextManager
+
     import click
     from flask import Flask
+
+    from advanced_alchemy.service import SQLAlchemySyncServiceCompositionInput
 
 
 class AdvancedAlchemy:
@@ -226,3 +230,22 @@ class AdvancedAlchemy:
                     self.portal_provider.portal.call(session.close)
             else:
                 session.close()
+
+    def provide_services(
+        self,
+        *inputs: "SQLAlchemySyncServiceCompositionInput[Any]",
+        key: str = "default",
+    ) -> "AbstractContextManager[tuple[Any, ...]]":
+        """Provides a services instance for composition.
+
+        Args:
+            *inputs: The service classes or providers to provide.
+            key: Optional key for the service.
+
+        Returns:
+            A context manager that yields a tuple of services.
+        """
+        from advanced_alchemy.extensions.flask.providers import provide_sync_services as _provide_services
+
+        config = cast("SQLAlchemySyncConfig", next(c for c in self.config if (c.bind_key or "default") == key))
+        return cast("AbstractContextManager[tuple[Any, ...]]", _provide_services(*inputs, config=config))

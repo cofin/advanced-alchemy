@@ -8,6 +8,7 @@ from advanced_alchemy.alembic.commands import AlembicCommands
 from advanced_alchemy.config import AlembicAsyncConfig, AlembicSyncConfig, AsyncSessionConfig, SyncSessionConfig
 from advanced_alchemy.extensions.starlette.config import EngineConfig, SQLAlchemyAsyncConfig, SQLAlchemySyncConfig
 from advanced_alchemy.extensions.starlette.extension import AdvancedAlchemy
+from advanced_alchemy.extensions.starlette.providers import provide_async_services
 
 __all__ = (
     "AdvancedAlchemy",
@@ -24,6 +25,7 @@ __all__ = (
     "filters",
     "mixins",
     "operations",
+    "provide_async_services",
     "repository",
     "service",
     "types",

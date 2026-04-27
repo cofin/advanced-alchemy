@@ -9,6 +9,7 @@ You should not have modify this module very often and should only be invoked und
 import datetime
 import inspect
 from collections.abc import AsyncGenerator, Callable, Generator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -40,6 +41,7 @@ from advanced_alchemy.service import (
     LoadSpec,
     ModelT,
     SQLAlchemyAsyncRepositoryService,
+    SQLAlchemyAsyncServiceComposition,
     SQLAlchemySyncRepositoryService,
 )
 from advanced_alchemy.utils.dependencies import DependencyCache, FieldNameType, FilterConfig, make_hashable
@@ -47,12 +49,14 @@ from advanced_alchemy.utils.singleton import SingletonMeta
 from advanced_alchemy.utils.text import camelize
 
 if TYPE_CHECKING:
+    from litestar.connection import ASGIConnection
     from sqlalchemy import Select
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
 
     from advanced_alchemy.extensions.litestar.plugins.init.config.asyncio import SQLAlchemyAsyncConfig
     from advanced_alchemy.extensions.litestar.plugins.init.config.sync import SQLAlchemySyncConfig
+    from advanced_alchemy.service import SQLAlchemyAsyncServiceCompositionInput
 
 DTorNone = Optional[datetime.datetime]
 StringOrNone = Optional[str]
@@ -75,6 +79,7 @@ __all__ = (
     "create_service_dependencies",
     "create_service_provider",
     "dep_cache",
+    "provide_async_services",
 )
 
 _CACHE_NAMESPACE = "advanced_alchemy.extensions.litestar.providers"
@@ -685,3 +690,266 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
     provide_filters.__annotations__["return"] = list[FilterTypes]
 
     return provide_filters
+
+
+# ============================================================================
+# provide_async_services — out-of-DI service composition (CLI/listeners/jobs/guards)
+# ============================================================================
+#
+# 10 overloads required: PEP 646 has no type-level map for
+# Callable[..., AsyncGenerator[T, None]]; see python/typing#1361.
+# Empirically verified against mypy 1.20.2 and pyright 1.1.409 (2026-04-26).
+# For unbounded arity with full per-position typing, use
+# advanced_alchemy.service.SQLAlchemyAsyncServiceComposition builder.
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+T3 = TypeVar("T3")
+T4 = TypeVar("T4")
+T5 = TypeVar("T5")
+T6 = TypeVar("T6")
+T7 = TypeVar("T7")
+T8 = TypeVar("T8")
+T9 = TypeVar("T9")
+T10 = TypeVar("T10")
+
+
+@overload
+def provide_async_services(
+    p1: "SQLAlchemyAsyncServiceCompositionInput[T1]",
+    /,
+    *,
+    config: "SQLAlchemyAsyncConfig",
+    session: "Optional[AsyncSession]" = ...,
+    connection: "Optional[ASGIConnection[Any, Any, Any, Any]]" = ...,
+) -> "AbstractAsyncContextManager[tuple[T1]]": ...
+
+
+@overload
+def provide_async_services(
+    p1: "SQLAlchemyAsyncServiceCompositionInput[T1]",
+    p2: "SQLAlchemyAsyncServiceCompositionInput[T2]",
+    /,
+    *,
+    config: "SQLAlchemyAsyncConfig",
+    session: "Optional[AsyncSession]" = ...,
+    connection: "Optional[ASGIConnection[Any, Any, Any, Any]]" = ...,
+) -> "AbstractAsyncContextManager[tuple[T1, T2]]": ...
+
+
+@overload
+def provide_async_services(
+    p1: "SQLAlchemyAsyncServiceCompositionInput[T1]",
+    p2: "SQLAlchemyAsyncServiceCompositionInput[T2]",
+    p3: "SQLAlchemyAsyncServiceCompositionInput[T3]",
+    /,
+    *,
+    config: "SQLAlchemyAsyncConfig",
+    session: "Optional[AsyncSession]" = ...,
+    connection: "Optional[ASGIConnection[Any, Any, Any, Any]]" = ...,
+) -> "AbstractAsyncContextManager[tuple[T1, T2, T3]]": ...
+
+
+@overload
+def provide_async_services(
+    p1: "SQLAlchemyAsyncServiceCompositionInput[T1]",
+    p2: "SQLAlchemyAsyncServiceCompositionInput[T2]",
+    p3: "SQLAlchemyAsyncServiceCompositionInput[T3]",
+    p4: "SQLAlchemyAsyncServiceCompositionInput[T4]",
+    /,
+    *,
+    config: "SQLAlchemyAsyncConfig",
+    session: "Optional[AsyncSession]" = ...,
+    connection: "Optional[ASGIConnection[Any, Any, Any, Any]]" = ...,
+) -> "AbstractAsyncContextManager[tuple[T1, T2, T3, T4]]": ...
+
+
+@overload
+def provide_async_services(
+    p1: "SQLAlchemyAsyncServiceCompositionInput[T1]",
+    p2: "SQLAlchemyAsyncServiceCompositionInput[T2]",
+    p3: "SQLAlchemyAsyncServiceCompositionInput[T3]",
+    p4: "SQLAlchemyAsyncServiceCompositionInput[T4]",
+    p5: "SQLAlchemyAsyncServiceCompositionInput[T5]",
+    /,
+    *,
+    config: "SQLAlchemyAsyncConfig",
+    session: "Optional[AsyncSession]" = ...,
+    connection: "Optional[ASGIConnection[Any, Any, Any, Any]]" = ...,
+) -> "AbstractAsyncContextManager[tuple[T1, T2, T3, T4, T5]]": ...
+
+
+@overload
+def provide_async_services(
+    p1: "SQLAlchemyAsyncServiceCompositionInput[T1]",
+    p2: "SQLAlchemyAsyncServiceCompositionInput[T2]",
+    p3: "SQLAlchemyAsyncServiceCompositionInput[T3]",
+    p4: "SQLAlchemyAsyncServiceCompositionInput[T4]",
+    p5: "SQLAlchemyAsyncServiceCompositionInput[T5]",
+    p6: "SQLAlchemyAsyncServiceCompositionInput[T6]",
+    /,
+    *,
+    config: "SQLAlchemyAsyncConfig",
+    session: "Optional[AsyncSession]" = ...,
+    connection: "Optional[ASGIConnection[Any, Any, Any, Any]]" = ...,
+) -> "AbstractAsyncContextManager[tuple[T1, T2, T3, T4, T5, T6]]": ...
+
+
+@overload
+def provide_async_services(
+    p1: "SQLAlchemyAsyncServiceCompositionInput[T1]",
+    p2: "SQLAlchemyAsyncServiceCompositionInput[T2]",
+    p3: "SQLAlchemyAsyncServiceCompositionInput[T3]",
+    p4: "SQLAlchemyAsyncServiceCompositionInput[T4]",
+    p5: "SQLAlchemyAsyncServiceCompositionInput[T5]",
+    p6: "SQLAlchemyAsyncServiceCompositionInput[T6]",
+    p7: "SQLAlchemyAsyncServiceCompositionInput[T7]",
+    /,
+    *,
+    config: "SQLAlchemyAsyncConfig",
+    session: "Optional[AsyncSession]" = ...,
+    connection: "Optional[ASGIConnection[Any, Any, Any, Any]]" = ...,
+) -> "AbstractAsyncContextManager[tuple[T1, T2, T3, T4, T5, T6, T7]]": ...
+
+
+@overload
+def provide_async_services(
+    p1: "SQLAlchemyAsyncServiceCompositionInput[T1]",
+    p2: "SQLAlchemyAsyncServiceCompositionInput[T2]",
+    p3: "SQLAlchemyAsyncServiceCompositionInput[T3]",
+    p4: "SQLAlchemyAsyncServiceCompositionInput[T4]",
+    p5: "SQLAlchemyAsyncServiceCompositionInput[T5]",
+    p6: "SQLAlchemyAsyncServiceCompositionInput[T6]",
+    p7: "SQLAlchemyAsyncServiceCompositionInput[T7]",
+    p8: "SQLAlchemyAsyncServiceCompositionInput[T8]",
+    /,
+    *,
+    config: "SQLAlchemyAsyncConfig",
+    session: "Optional[AsyncSession]" = ...,
+    connection: "Optional[ASGIConnection[Any, Any, Any, Any]]" = ...,
+) -> "AbstractAsyncContextManager[tuple[T1, T2, T3, T4, T5, T6, T7, T8]]": ...
+
+
+@overload
+def provide_async_services(
+    p1: "SQLAlchemyAsyncServiceCompositionInput[T1]",
+    p2: "SQLAlchemyAsyncServiceCompositionInput[T2]",
+    p3: "SQLAlchemyAsyncServiceCompositionInput[T3]",
+    p4: "SQLAlchemyAsyncServiceCompositionInput[T4]",
+    p5: "SQLAlchemyAsyncServiceCompositionInput[T5]",
+    p6: "SQLAlchemyAsyncServiceCompositionInput[T6]",
+    p7: "SQLAlchemyAsyncServiceCompositionInput[T7]",
+    p8: "SQLAlchemyAsyncServiceCompositionInput[T8]",
+    p9: "SQLAlchemyAsyncServiceCompositionInput[T9]",
+    /,
+    *,
+    config: "SQLAlchemyAsyncConfig",
+    session: "Optional[AsyncSession]" = ...,
+    connection: "Optional[ASGIConnection[Any, Any, Any, Any]]" = ...,
+) -> "AbstractAsyncContextManager[tuple[T1, T2, T3, T4, T5, T6, T7, T8, T9]]": ...
+
+
+@overload
+def provide_async_services(
+    p1: "SQLAlchemyAsyncServiceCompositionInput[T1]",
+    p2: "SQLAlchemyAsyncServiceCompositionInput[T2]",
+    p3: "SQLAlchemyAsyncServiceCompositionInput[T3]",
+    p4: "SQLAlchemyAsyncServiceCompositionInput[T4]",
+    p5: "SQLAlchemyAsyncServiceCompositionInput[T5]",
+    p6: "SQLAlchemyAsyncServiceCompositionInput[T6]",
+    p7: "SQLAlchemyAsyncServiceCompositionInput[T7]",
+    p8: "SQLAlchemyAsyncServiceCompositionInput[T8]",
+    p9: "SQLAlchemyAsyncServiceCompositionInput[T9]",
+    p10: "SQLAlchemyAsyncServiceCompositionInput[T10]",
+    /,
+    *,
+    config: "SQLAlchemyAsyncConfig",
+    session: "Optional[AsyncSession]" = ...,
+    connection: "Optional[ASGIConnection[Any, Any, Any, Any]]" = ...,
+) -> "AbstractAsyncContextManager[tuple[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10]]": ...
+
+
+@overload
+def provide_async_services(
+    *providers: "SQLAlchemyAsyncServiceCompositionInput[Any]",
+    config: "SQLAlchemyAsyncConfig",
+    session: "Optional[AsyncSession]" = ...,
+    connection: "Optional[ASGIConnection[Any, Any, Any, Any]]" = ...,
+) -> "AbstractAsyncContextManager[tuple[Any, ...]]": ...
+
+
+@asynccontextmanager
+async def provide_async_services(
+    *providers: "SQLAlchemyAsyncServiceCompositionInput[Any]",
+    config: "SQLAlchemyAsyncConfig",
+    session: "Optional[AsyncSession]" = None,
+    connection: "Optional[ASGIConnection[Any, Any, Any, Any]]" = None,
+) -> "AsyncGenerator[tuple[Any, ...], None]":
+    r"""Compose multiple services on a shared session — Litestar-aware.
+
+    Three operating modes (mutually exclusive):
+
+    1. **Explicit session** — caller passes ``session=`` and owns the session
+       lifecycle (commit/rollback/close).
+    2. **Connection-scoped** — caller passes ``connection=`` (Litestar
+       ``ASGIConnection`\"); session is resolved via
+       ``config.provide_session(connection.app.state, connection.scope)``,
+       reusing the request-scoped session.
+    3. **Standalone** — caller passes neither; a fresh session is opened via
+       ``config.get_session()`` and closed on exit.
+
+    Args:
+        *providers: 1-10 service-provider callables or classes (typed) or any number
+            (typed as ``Any`` via the fallback overload).
+        config: SQLAlchemy async config — required in all modes for session resolution.
+        session: Optional pre-existing session (mode 1).
+        connection: Optional Litestar ASGI connection (mode 2).
+
+    Raises:
+        ValueError: If both ``session`` and ``connection`` are provided.
+        ValueError: If no providers are passed.
+
+    Yields:
+        Tuple of N services in the order their providers were passed.
+
+    Example:
+        .. code-block:: python
+
+            # CLI / background job (standalone mode):
+            async with provide_async_services(
+                provide_users_service,
+                provide_roles_service,
+                config=alchemy,
+            ) as (users, roles):
+                await users.create(...)
+                await roles.create(...)
+
+            # Litestar guard (connection-scoped):
+            async with provide_async_services(
+                provide_users_service,
+                config=alchemy,
+                connection=connection,
+            ) as (users,):
+                return await users.get_one_or_none(email=token.sub)
+    """
+    if session is not None and connection is not None:
+        msg = "Cannot provide both 'session' and 'connection' — choose one"
+        raise ValueError(msg)
+    if not providers:
+        msg = "At least one service provider or class is required"
+        raise ValueError(msg)
+
+    composer: Any = SQLAlchemyAsyncServiceComposition.starting_with(providers[0])
+    for p in providers[1:]:
+        composer = composer.add(p)
+
+    if session is not None:
+        async with composer.open(session=session) as services:
+            yield services
+    elif connection is not None:
+        db_session = config.provide_session(connection.app.state, connection.scope)
+        async with composer.open(session=db_session) as services:
+            yield services
+    else:
+        async with config.get_session() as db_session, composer.open(session=db_session) as services:
+            yield services
