@@ -1,13 +1,13 @@
 from collections.abc import AsyncGenerator, Generator
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Literal, Optional
 
 import pytest
 from pytest import FixtureRequest
-from sqlalchemy import Boolean, Engine, String, func, select
-from sqlalchemy.dialects import oracle
+from sqlalchemy import Boolean, Engine, ForeignKey, String, create_engine, func, select
+from sqlalchemy.dialects import mssql, mysql, oracle, postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncEngine
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, joinedload, mapped_column, relationship
 
 from advanced_alchemy.base import BigIntBase, UUIDAuditBase
 from advanced_alchemy.filters import (
@@ -592,6 +592,202 @@ def test_order_by_with_instrumented_attribute(session: Session, movie_model_sync
     statement = order_by_filter.append_to_statement(select(Movie), Movie)
     results = session.execute(statement).scalars().all()
     assert results[0].title == "Shawshank Redemption"
+
+
+def test_order_by_nulls_placement(session: Session, movie_model_sync: type[DeclarativeBase]) -> None:
+    """ "The Hangover" has a NULL director, and the databases disagree about where NULLs sort.
+
+    `nulls` pins it: without it, a descending sort puts the NULL row first on PostgreSQL and last on
+    SQLite, so the same query pages differently per backend.
+    """
+    Movie = movie_model_sync
+
+    # Skip mock engines
+    if getattr(session.bind.dialect, "name", "") == "mock":
+        pytest.skip("Mock engines not supported for filter tests")
+
+    # Clean any existing data first, then setup fresh data
+    if getattr(session.bind.dialect, "name", "") != "mock":
+        session.execute(Movie.__table__.delete())
+        session.commit()
+    setup_movie_data(session, Movie)
+
+    for sort_order in ("asc", "desc"):
+        nulls_last_filter = OrderBy(field_name="director", sort_order=sort_order, nulls="last")
+        results = session.execute(nulls_last_filter.append_to_statement(select(Movie), Movie)).scalars().all()
+        assert results[-1].director is None, f"{sort_order} with nulls='last' must end with the NULL row"
+
+        nulls_first_filter = OrderBy(field_name="director", sort_order=sort_order, nulls="first")
+        results = session.execute(nulls_first_filter.append_to_statement(select(Movie), Movie)).scalars().all()
+        assert results[0].director is None, f"{sort_order} with nulls='first' must start with the NULL row"
+
+
+class OrderByBase(DeclarativeBase):
+    pass
+
+
+class OrderByMovie(OrderByBase):
+    __tablename__ = "order_by_nulls_movie"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    director: Mapped[str] = mapped_column(String(length=50), nullable=True)
+    credits: Mapped[list["OrderByCredit"]] = relationship()
+
+
+class OrderByCredit(OrderByBase):
+    __tablename__ = "order_by_nulls_credit"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    movie_id: Mapped[int] = mapped_column(ForeignKey(OrderByMovie.id))
+
+
+@pytest.fixture
+def order_by_session() -> Generator[Session, None, None]:
+    engine = create_engine("sqlite://")
+    try:
+        OrderByBase.metadata.create_all(engine)
+        with Session(engine) as session:
+            session.add_all(
+                OrderByMovie(id=index, director=director, credits=[OrderByCredit(), OrderByCredit()])
+                for index, director in enumerate((None, "z", "a"), start=1)
+            )
+            session.commit()
+            yield session
+    finally:
+        engine.dispose()
+
+
+NULLS_NATIVE_DIALECTS = [
+    postgresql.dialect(),  # type: ignore[no-untyped-call,unused-ignore]
+    sqlite.dialect(),  # type: ignore[no-untyped-call,unused-ignore]
+    oracle.dialect(),  # type: ignore[no-untyped-call,unused-ignore]
+]
+NULLS_EMULATED_DIALECTS = [
+    mysql.dialect(),  # type: ignore[no-untyped-call,unused-ignore]
+    mssql.dialect(),  # type: ignore[no-untyped-call,unused-ignore]
+]
+
+NULLS_NATIVE = pytest.mark.parametrize("dialect", NULLS_NATIVE_DIALECTS)
+NULLS_EMULATED = pytest.mark.parametrize("dialect", NULLS_EMULATED_DIALECTS)
+
+
+def _compile_order_by_nulls(dialect: Any, **kwargs: Any) -> str:
+    statement = OrderBy(field_name="director", **kwargs).append_to_statement(select(OrderByMovie), OrderByMovie)
+    return str(statement.compile(dialect=dialect))
+
+
+@NULLS_NATIVE
+@pytest.mark.parametrize(("nulls", "clause"), [("first", "NULLS FIRST"), ("last", "NULLS LAST")])
+@pytest.mark.unit
+def test_dialects_with_the_syntax_get_the_native_clause(dialect: Any, nulls: str, clause: str) -> None:
+    """Keeping the native clause is what lets an index on the column still satisfy the ordering."""
+    assert clause in _compile_order_by_nulls(dialect, sort_order="desc", nulls=nulls)
+
+
+@NULLS_EMULATED
+@pytest.mark.parametrize(("sort_order", "nulls"), [("asc", "last"), ("desc", "first")])
+@pytest.mark.unit
+def test_dialects_without_the_syntax_get_a_nullity_key(dialect: Any, sort_order: str, nulls: str) -> None:
+    """MySQL and SQL Server reject `NULLS FIRST`/`NULLS LAST` outright, so it must not be emitted."""
+    compiled = _compile_order_by_nulls(dialect, sort_order=sort_order, nulls=nulls)
+
+    assert "NULLS" not in compiled
+    assert "CASE WHEN" in compiled
+    assert compiled.rstrip().endswith(sort_order.upper())
+
+
+@NULLS_EMULATED
+@pytest.mark.parametrize(("sort_order", "nulls"), [("asc", "first"), ("desc", "last")])
+@pytest.mark.unit
+def test_placements_native_to_null_lowest_backends_stay_plain(dialect: Any, sort_order: str, nulls: str) -> None:
+    """These backends sort NULL lowest, so the plain term already places it and an index can satisfy the sort."""
+    compiled = _compile_order_by_nulls(dialect, sort_order=sort_order, nulls=nulls)
+
+    assert "NULLS" not in compiled
+    assert "CASE" not in compiled
+    assert compiled.rstrip().endswith(f"director {sort_order.upper()}")
+
+
+@NULLS_EMULATED
+@pytest.mark.parametrize(
+    ("sort_order", "nulls", "when_null"), [("asc", "last", "THEN 1 ELSE 0"), ("desc", "first", "THEN 0 ELSE 1")]
+)
+@pytest.mark.unit
+def test_the_nullity_key_sorts_the_right_way(dialect: Any, sort_order: str, nulls: str, when_null: str) -> None:
+    """The key ascends, so NULLs need the higher value to land last and the lower one to land first."""
+    assert when_null in _compile_order_by_nulls(dialect, sort_order=sort_order, nulls=nulls)
+
+
+@pytest.mark.parametrize("dialect", NULLS_NATIVE_DIALECTS + NULLS_EMULATED_DIALECTS)
+@pytest.mark.unit
+def test_the_default_is_untouched(dialect: Any) -> None:
+    """Without `nulls` no NULLS clause and no CASE key are emitted."""
+    compiled = _compile_order_by_nulls(dialect, sort_order="desc")
+
+    assert "NULLS" not in compiled
+    assert "CASE" not in compiled
+
+
+@pytest.mark.parametrize("sort_order", ["asc", "desc"])
+@pytest.mark.parametrize("nulls", ["first", "last"])
+@pytest.mark.unit
+def test_nulls_placement_with_paginated_eager_loading(
+    order_by_session: Session, sort_order: Literal["asc", "desc"], nulls: Literal["first", "last"]
+) -> None:
+    statement = OrderBy("director", sort_order, nulls).append_to_statement(
+        select(OrderByMovie).options(joinedload(OrderByMovie.credits)).limit(2).offset(1), OrderByMovie
+    )
+    movies = order_by_session.scalars(statement).unique().all()
+
+    expected = [3, 2] if sort_order == "asc" else [2, 3]
+    expected = [1, *expected] if nulls == "first" else [*expected, 1]
+    assert [movie.id for movie in movies] == expected[1:]
+    assert all(len(movie.credits) == 2 for movie in movies)
+
+
+@NULLS_EMULATED
+@pytest.mark.unit
+def test_emulated_null_ordering_expands_labels_inside_case(dialect: Any) -> None:
+    director = func.lower(OrderByMovie.director).label("normalized_director")
+    statement = OrderBy(director, nulls="last").append_to_statement(select(director), OrderByMovie)
+
+    compiled = str(statement.compile(dialect=dialect))
+
+    assert compiled.endswith(
+        "ORDER BY CASE WHEN (lower(order_by_nulls_movie.director) IS NULL) THEN 1 ELSE 0 END, normalized_director ASC"
+    )
+
+
+@NULLS_EMULATED
+@pytest.mark.unit
+def test_emulated_eager_loading_adapts_the_ordering_column(dialect: Any) -> None:
+    statement = OrderBy("director", nulls="last").append_to_statement(
+        select(OrderByMovie).options(joinedload(OrderByMovie.credits)).limit(2), OrderByMovie
+    )
+    compiled = str(statement.compile(dialect=dialect))
+
+    assert "ASC AS" not in compiled
+    assert compiled.endswith("ORDER BY CASE WHEN (anon_1.director IS NULL) THEN 1 ELSE 0 END, anon_1.director ASC")
+
+
+@pytest.mark.unit
+def test_nulls_placement_reuses_distinct_compiled_statements(order_by_session: Session) -> None:
+    cache: dict[Any, Any] = {}
+    for _ in range(2):
+        for field in ("director", "id"):
+            for sort_order in ("asc", "desc"):
+                for nulls in ("first", "last"):
+                    statement = OrderBy(field, sort_order, nulls).append_to_statement(
+                        select(OrderByMovie.id), OrderByMovie
+                    )
+                    result = order_by_session.scalars(statement, execution_options={"compiled_cache": cache}).all()
+                    if field == "id":
+                        expected = [1, 2, 3] if sort_order == "asc" else [3, 2, 1]
+                    else:
+                        expected = [3, 2] if sort_order == "asc" else [2, 3]
+                        expected = [1, *expected] if nulls == "first" else [*expected, 1]
+                    assert result == expected
+        assert len(cache) == 8
 
 
 def test_search_filter(session: Session, movie_model_sync: type[DeclarativeBase]) -> None:
