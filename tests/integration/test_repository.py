@@ -1512,9 +1512,9 @@ async def test_upsert_many_no_merge_forces_fallback(
 ) -> None:
     """``no_merge=True`` must take the SELECT+partition+add/update fallback path.
 
-    The fallback emits at minimum a SELECT (existence probe) followed by an
-    INSERT statement — the native path emits a single upsert with no
-    initial SELECT.
+    All match keys here are ``None`` so the fallback skips the existence probe
+    and inserts every row through the ORM — the statements must be plain
+    INSERTs with no native upsert clause.
     """
     from sqlalchemy import event
 
@@ -1541,9 +1541,9 @@ async def test_upsert_many_no_merge_forces_fallback(
         event.remove(sync_engine, "before_execute", _record)
 
     assert len(results) == 3
-    saw_select = any("SELECT" in s.upper() for s in statements)
     saw_insert = any(s.upper().startswith("INSERT") for s in statements)
-    assert saw_select and saw_insert, f"fallback expected SELECT+INSERT, got: {statements}"
+    saw_native_upsert = any("ON CONFLICT" in s.upper() or "MERGE" in s.upper() for s in statements)
+    assert saw_insert and not saw_native_upsert, f"fallback expected plain INSERTs, got: {statements}"
 
 
 async def test_upsert_many_chunk_size_emits_multiple_chunks(
@@ -1598,10 +1598,17 @@ async def test_upsert_many_chunk_size_emits_multiple_chunks(
     assert len(upsert_statements) >= 2, f"expected >=2 upsert statements with chunk_size=4, got {upsert_statements}"
 
 
-async def test_upsert_many_rejects_duplicate_match_keys(
+async def test_upsert_many_duplicate_match_keys_use_fallback(
     seeded_test_session_async: "tuple[AsyncSession, dict[str, type]]",
 ) -> None:
-    """A batch must not have backend-dependent duplicate-key behavior."""
+    """Duplicate keys must not have backend-dependent native-statement behavior.
+
+    The batch routes through the ORM fallback, which merges both rows onto the
+    same target; a genuine primary-key conflict surfaces as the wrapped
+    repository error rather than a raw ``ValueError``.
+    """
+    from advanced_alchemy.exceptions import RepositoryError
+
     session, models = seeded_test_session_async
     if "user_role" not in models:
         pytest.skip("user_role model not available")
@@ -1613,7 +1620,7 @@ async def test_upsert_many_rejects_duplicate_match_keys(
         UserRole(user_id=700, role_id=700, is_active=False),
     ]
 
-    with pytest.raises(ValueError, match="duplicate values for match_fields"):
+    with pytest.raises(RepositoryError):
         await maybe_async(user_role_repo.upsert_many(data))
 
 

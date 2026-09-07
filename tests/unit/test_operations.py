@@ -861,11 +861,12 @@ class TestResolveUpsertStrategy:
         assert strategy.kind == "fallback"
         assert strategy.supports_returning is False
 
-    def test_non_existent_column_raises_value_error(self, sample_table: Table) -> None:
+    def test_non_existent_column_falls_back(self, sample_table: Table) -> None:
         from advanced_alchemy.operations import resolve_upsert_strategy
 
-        with pytest.raises(ValueError, match="not present in table"):
-            resolve_upsert_strategy(sample_table, ("missing_col",), "postgresql")
+        strategy = resolve_upsert_strategy(sample_table, ("missing_col",), "postgresql")
+        assert strategy.kind == "fallback"
+        assert strategy.supports_returning is False
 
     def test_empty_match_fields_raises(self, sample_table: Table) -> None:
         from advanced_alchemy.operations import resolve_upsert_strategy

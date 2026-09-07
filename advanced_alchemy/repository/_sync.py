@@ -51,7 +51,6 @@ from advanced_alchemy.base import model_to_dict
 from advanced_alchemy.exceptions import ErrorMessages, NotFoundError, RepositoryError, wrap_sqlalchemy_exception
 from advanced_alchemy.filters import StatementFilter, StatementTypeT
 from advanced_alchemy.operations import (
-    DEFAULT_INVOKE_FAILED,
     OnConflictUpsert,
     UpsertStrategy,
     invoke_python_default,
@@ -366,7 +365,9 @@ class SQLAlchemySyncRepositoryProtocol(FilterableRepositoryProtocol[ModelT], Pro
         error_messages: Optional[Union[ErrorMessages, EmptyType]] = Empty,
         load: Optional[LoadSpec] = None,
         execution_options: Optional[dict[str, Any]] = None,
+        uniquify: Optional[bool] = None,
         bind_group: Optional[str] = None,
+        chunk_size: Optional[int] = None,
     ) -> List[ModelT]: ...
 
     def get_many_and_count(
@@ -2936,7 +2937,13 @@ class SQLAlchemySyncRepository(SQLAlchemySyncRepositoryProtocol[ModelT], Filtera
         ``INSERT OR UPDATE`` is native only for primary-key matching, and
         ambiguous MySQL/MariaDB unique targets use the fallback. Also falls
         back to the SELECT-then-partition-then-add/update path when the strategy
-        resolver cannot prove uniqueness or when ``no_merge=True`` is set.
+        resolver cannot prove uniqueness, when ``no_merge=True`` is set, when
+        the batch contains duplicate match keys, or when the model depends on
+        ORM unit-of-work behavior (mapper events, relationship cascades,
+        joined-table inheritance, ``FileObject`` columns).
+
+        The native path returns session-attached instances hydrated from the
+        database; primary key values are copied back onto the input instances.
 
         !!! tip
             In most cases, you will want to set `match_fields` to the combination of attributes, excluded the primary key, that define uniqueness for a row.
@@ -2981,9 +2988,13 @@ class SQLAlchemySyncRepository(SQLAlchemySyncRepositoryProtocol[ModelT], Filtera
             tuple(sorted(resolved_match_fields)),
             self._dialect,
         )
-        self._validate_upsert_match_values(data, resolved_match_fields)
 
-        if no_merge or strategy.kind == "fallback":
+        if (
+            no_merge
+            or strategy.kind == "fallback"
+            or self._has_duplicate_match_keys(data, resolved_match_fields)
+            or self._native_upsert_requires_orm(data)
+        ):
             return self._upsert_many_fallback(
                 data=data,
                 match_fields=resolved_match_fields,
@@ -2999,19 +3010,17 @@ class SQLAlchemySyncRepository(SQLAlchemySyncRepositoryProtocol[ModelT], Filtera
             error_messages=error_messages, dialect_name=self._dialect.name, wrap_exceptions=self.wrap_exceptions
         ):
             update_columns = self._get_native_upsert_update_columns(data, strategy)
-            if update_columns is None:
-                return self._upsert_many_fallback(
-                    data=data,
-                    match_fields=resolved_match_fields,
-                    auto_expunge=auto_expunge,
-                    auto_commit=auto_commit,
-                    error_messages=error_messages,
-                    load=load,
-                    execution_options=execution_options,
-                    bind_group=bind_group,
-                )
-            input_rows = [self._prepare_upsert_row(datum) for datum in data]
-            if self._native_path_requires_fallback(input_rows, strategy, resolved_match_fields):
+            input_rows: Optional[List[dict[str, Any]]] = None
+            if update_columns is not None:
+                try:
+                    input_rows = [self._prepare_upsert_row(datum) for datum in data]
+                except (AttributeError, TypeError, ValueError):
+                    input_rows = None
+            if (
+                update_columns is None
+                or input_rows is None
+                or self._native_path_requires_fallback(input_rows, strategy, resolved_match_fields)
+            ):
                 return self._upsert_many_fallback(
                     data=data,
                     match_fields=resolved_match_fields,
@@ -3038,6 +3047,10 @@ class SQLAlchemySyncRepository(SQLAlchemySyncRepositoryProtocol[ModelT], Filtera
                 bind_group=bind_group,
                 chunk_size=chunk_size,
             )
+            for datum, instance in zip(data, instances):
+                if datum is not instance:
+                    for pk_attr in self._pk_attr_names:
+                        setattr(datum, pk_attr, getattr(instance, pk_attr))
             for instance in instances:
                 self._queue_cache_invalidation(self.get_primary_key_value(instance), bind_group)
             self._flush_or_commit(auto_commit=auto_commit)
@@ -3066,31 +3079,21 @@ class SQLAlchemySyncRepository(SQLAlchemySyncRepositoryProtocol[ModelT], Filtera
         data_to_update: List[ModelT] = []
         data_to_insert: List[ModelT] = []
         match_rows = [{field_name: getattr(datum, field_name) for field_name in match_fields} for datum in data]
-        if all(value is not None for row in match_rows for value in row.values()):
-            match_filter = self._get_upsert_match_filter(match_rows, match_fields)
-        else:
-            match_filter = or_(
-                *[
-                    and_(
-                        *[
-                            get_instrumented_attr(self.model_type, field_name) == row[field_name]
-                            for field_name in match_fields
-                        ]
-                    )
-                    for row in match_rows
-                ]
-            )
-        match_filters: List[Union[StatementFilter, ColumnElement[bool]]] = [match_filter]
+        queryable_rows = [row for row in match_rows if all(value is not None for value in row.values())]
 
         with wrap_sqlalchemy_exception(
             error_messages=error_messages, dialect_name=self._dialect.name, wrap_exceptions=self.wrap_exceptions
         ):
-            existing_objs = self.get_many(
-                *match_filters,
-                load=load,
-                execution_options=execution_options,
-                auto_expunge=False,
-                bind_group=bind_group,
+            existing_objs = (
+                self.get_many(
+                    self._get_upsert_match_filter(queryable_rows, match_fields),
+                    load=load,
+                    execution_options=execution_options,
+                    auto_expunge=False,
+                    bind_group=bind_group,
+                )
+                if queryable_rows
+                else []
             )
             existing_ids = self._get_object_ids(existing_objs=existing_objs)
             hashable_existing_ids: set[PrimaryKeyType] = set()
@@ -3137,8 +3140,14 @@ class SQLAlchemySyncRepository(SQLAlchemySyncRepositoryProtocol[ModelT], Filtera
         return instances
 
     @staticmethod
-    def _validate_upsert_match_values(data: List[ModelT], match_fields: List[str]) -> None:
-        """Reject duplicate source keys before dialects apply different semantics."""
+    def _has_duplicate_match_keys(data: List[ModelT], match_fields: List[str]) -> bool:
+        """Detect duplicate source keys, which dialects treat differently.
+
+        A single native statement containing two rows with the same conflict key
+        raises on some backends (postgresql: "cannot affect row a second time")
+        and silently last-writer-wins on others. The ORM fallback merges such
+        rows deterministically, so duplicated keys route the batch there.
+        """
         hashable_match_keys: set[tuple[Any, ...]] = set()
         unhashable_match_keys: list[tuple[Any, ...]] = []
         for datum in data:
@@ -3162,8 +3171,36 @@ class SQLAlchemySyncRepository(SQLAlchemySyncRepositoryProtocol[ModelT], Filtera
                 if not is_duplicate:
                     hashable_match_keys.add(match_key)
             if is_duplicate:
-                msg = f"upsert_many data contains duplicate values for match_fields {match_fields!r}: {match_key!r}"
-                raise ValueError(msg)
+                return True
+        return False
+
+    def _native_upsert_requires_orm(self, data: List[ModelT]) -> bool:
+        """Detect batches whose semantics depend on the ORM unit of work.
+
+        Native Core DML never runs mapper-level events, relationship
+        save-update cascades, or the FileObject flush listeners — models and
+        instances relying on any of those must take the ORM fallback so their
+        behavior matches ``add_many``/``update_many``.
+        """
+        from advanced_alchemy.types.file_object import StoredObject
+
+        mapper = self.model_type.__mapper__
+        if len(mapper.tables) > 1:
+            return True
+        if any(
+            ancestor.dispatch.before_insert
+            or ancestor.dispatch.after_insert
+            or ancestor.dispatch.before_update
+            or ancestor.dispatch.after_update
+            for ancestor in mapper.iterate_to_root()
+        ):
+            return True
+        if any(isinstance(column.type, StoredObject) for column in mapper.columns):
+            return True
+        relationship_keys = [relationship.key for relationship in mapper.relationships]
+        if not relationship_keys:
+            return False
+        return any(datum.__dict__.get(key) for datum in data for key in relationship_keys)
 
     def _get_native_upsert_update_columns(
         self,
@@ -3276,11 +3313,9 @@ class SQLAlchemySyncRepository(SQLAlchemySyncRepositoryProtocol[ModelT], Filtera
             if column.onupdate is not None and not has_update_intent:
                 onupdate_value = getattr(column.onupdate, "arg", None)
                 if callable(onupdate_value):
-                    resolved_value = invoke_python_default(onupdate_value)
-                    if resolved_value is not DEFAULT_INVOKE_FAILED:
-                        prepared_row[column.key] = resolved_value
-                        continue
-                elif onupdate_value is not None:
+                    prepared_row[column.key] = invoke_python_default(onupdate_value)
+                    continue
+                if onupdate_value is not None:
                     prepared_row[column.key] = onupdate_value
                     continue
             if has_update_intent:
@@ -3294,11 +3329,9 @@ class SQLAlchemySyncRepository(SQLAlchemySyncRepositoryProtocol[ModelT], Filtera
                 prepared_row.pop(column.key, None)
                 continue
             if callable(default_value):
-                resolved_value = invoke_python_default(default_value)
-                if resolved_value is not DEFAULT_INVOKE_FAILED:
-                    prepared_row[column.key] = resolved_value
-                    continue
-            elif value_default is not None and default_value is not None:
+                prepared_row[column.key] = invoke_python_default(default_value)
+                continue
+            if value_default is not None and default_value is not None:
                 prepared_row[column.key] = default_value
                 continue
             if column.primary_key or value_default is not None or column.server_default is not None:
@@ -3391,7 +3424,7 @@ class SQLAlchemySyncRepository(SQLAlchemySyncRepositoryProtocol[ModelT], Filtera
                 dialect_name=strategy.dialect_name,
                 model_type=self.model_type,
             )
-            if supports_returning:
+            if supports_returning and strategy.supports_returning:
                 returning_statement = statement.returning(self.model_type)
                 if loader_options:
                     returning_statement = returning_statement.options(*loader_options)
@@ -3462,7 +3495,9 @@ class SQLAlchemySyncRepository(SQLAlchemySyncRepositoryProtocol[ModelT], Filtera
         """Build the smallest exact-key predicate supported by the dialect."""
         match_columns = [get_instrumented_attr(self.model_type, field_name) for field_name in match_fields]
         if len(match_columns) == 1:
-            return match_columns[0].in_([row[match_fields[0]] for row in row_chunk])
+            match_values = [row[match_fields[0]] for row in row_chunk]
+            use_in = not self._prefer_any or self._type_must_use_in_instead_of_any(match_values, match_columns[0].type)
+            return match_columns[0].in_(match_values) if use_in else any_(match_values) == match_columns[0]  # type: ignore[arg-type]
         if self._dialect.name != "mssql":
             match_values = [tuple(row[field_name] for field_name in match_fields) for row in row_chunk]
             return tuple_(*match_columns).in_(match_values)
@@ -3474,12 +3509,26 @@ class SQLAlchemySyncRepository(SQLAlchemySyncRepositoryProtocol[ModelT], Filtera
         )
 
     @staticmethod
+    def _normalize_upsert_match_value(value: Any) -> Any:
+        """Fold the common collation-insensitive comparisons databases apply to text keys."""
+        if isinstance(value, str):
+            return value.casefold().rstrip()
+        return value
+
+    @classmethod
     def _order_upsert_results(
+        cls,
         instances: List[ModelT],
         input_rows: List[dict[str, Any]],
         match_fields: List[str],
     ) -> List[ModelT]:
-        """Restore input ordering because RETURNING/OUTPUT order is undefined."""
+        """Restore input ordering because RETURNING/OUTPUT order is undefined.
+
+        Pairs by exact match-key equality first. Rows the database matched
+        under a collation-insensitive comparison (``'foo'`` upserted onto a
+        stored ``'FOO'``) get a second, normalized pass; a pairing that is
+        still ambiguous raises instead of returning a misaligned list.
+        """
         instances_by_match_key: dict[tuple[Any, ...], ModelT] = {}
         unhashable_instances: list[tuple[tuple[Any, ...], ModelT]] = []
         for instance in instances:
@@ -3489,7 +3538,7 @@ class SQLAlchemySyncRepository(SQLAlchemySyncRepositoryProtocol[ModelT], Filtera
             except TypeError:
                 unhashable_instances.append((match_key, instance))
 
-        ordered_instances: List[ModelT] = []
+        ordered_instances: List[Optional[ModelT]] = []
         matched_instance_ids: set[int] = set()
         for row in input_rows:
             match_key = tuple(row[field_name] for field_name in match_fields)
@@ -3509,10 +3558,37 @@ class SQLAlchemySyncRepository(SQLAlchemySyncRepositoryProtocol[ModelT], Filtera
                     None,
                 )
             if matched_instance is not None:
-                ordered_instances.append(matched_instance)
                 matched_instance_ids.add(id(matched_instance))
-        ordered_instances.extend(instance for instance in instances if id(instance) not in matched_instance_ids)
-        return ordered_instances
+            ordered_instances.append(matched_instance)
+
+        unmatched_positions = [position for position, instance in enumerate(ordered_instances) if instance is None]
+        leftover_instances = [instance for instance in instances if id(instance) not in matched_instance_ids]
+        if not unmatched_positions and not leftover_instances:
+            return cast("List[ModelT]", ordered_instances)
+        ambiguity_msg = (
+            "upsert_many could not unambiguously pair hydrated rows with input rows; "
+            "verify that the batch keys are unique under the database's comparison rules"
+        )
+        if len(unmatched_positions) != len(leftover_instances):
+            raise RepositoryError(ambiguity_msg)
+        leftovers_by_normalized_key: dict[tuple[Any, ...], List[ModelT]] = {}
+        for instance in leftover_instances:
+            normalized_key = tuple(
+                cls._normalize_upsert_match_value(getattr(instance, field_name)) for field_name in match_fields
+            )
+            with contextlib.suppress(TypeError):
+                leftovers_by_normalized_key.setdefault(normalized_key, []).append(instance)
+        for position in unmatched_positions:
+            row = input_rows[position]
+            normalized_key = tuple(cls._normalize_upsert_match_value(row[field_name]) for field_name in match_fields)
+            try:
+                candidates = leftovers_by_normalized_key.get(normalized_key, [])
+            except TypeError:
+                candidates = []
+            if len(candidates) != 1:
+                raise RepositoryError(ambiguity_msg)
+            ordered_instances[position] = candidates.pop()
+        return cast("List[ModelT]", ordered_instances)
 
     def _get_object_ids(self, existing_objs: List[ModelT]) -> List[PrimaryKeyType]:
         """Extract primary key values from a list of model instances.
