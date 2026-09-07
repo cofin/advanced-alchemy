@@ -70,6 +70,22 @@ Provides basic string search capabilities.
         repository = FilteringPostRepository(session=db_session)
         return await repository.get_many(SearchFilter(field_name="title", value=query, ignore_case=True))
 
+``SearchFilter`` and ``NotInSearchFilter`` preserve SQL wildcard matching by
+default: ``%`` matches any sequence of characters and ``_`` matches one character.
+To match those characters literally in accounting codes or titles, opt in with
+``escape_wildcards=True``:
+
+.. code-block:: python
+
+    literal_search = SearchFilter(field_name="title", value="50% off", escape_wildcards=True)
+
+This option escapes ``%``, ``_``, and the escape character ``/`` while retaining
+the surrounding substring wildcards. Dialect-specific pattern syntax, such as
+SQL Server's bracket expressions (``[abc]``), is unchanged. It requires SQL
+``ESCAPE`` support. Spanner has no ``ESCAPE`` clause, so ``escape_wildcards``
+must stay ``False`` there. The Litestar and FastAPI filter providers enable it
+through the ``search_escape_wildcards`` key of ``FilterConfig``.
+
 Null and Not Null Filters
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 import pytest
+from google.cloud.sqlalchemy_spanner.sqlalchemy_spanner import SpannerDialect
 from pytest import FixtureRequest
 from sqlalchemy import Boolean, Engine, ForeignKey, String, create_engine, func, select
 from sqlalchemy.dialects import mssql, mysql, oracle, postgresql, sqlite
@@ -22,6 +23,7 @@ from advanced_alchemy.filters import (
     MultiFilter,
     NotExistsFilter,
     NotInCollectionFilter,
+    NotInSearchFilter,
     NotNullFilter,
     NullFilter,
     OnBeforeAfter,
@@ -806,6 +808,125 @@ def test_search_filter(session: Session, movie_model_sync: type[DeclarativeBase]
     statement = search_filter.append_to_statement(select(Movie), Movie)
     results = session.execute(statement).scalars().all()
     assert len(results) == 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "dialect",
+    [
+        sqlite.dialect(),  # type: ignore[no-untyped-call]
+        postgresql.dialect(),  # type: ignore[no-untyped-call]
+        mysql.dialect(),  # type: ignore[no-untyped-call]
+        oracle.dialect(),  # type: ignore[no-untyped-call]
+        mssql.dialect(),  # type: ignore[no-untyped-call]
+        SpannerDialect(),
+    ],
+)
+@pytest.mark.parametrize(
+    ("filter_type", "ignore_case", "operator"),
+    [
+        (SearchFilter, False, "like"),
+        (SearchFilter, True, "ilike"),
+        (NotInSearchFilter, False, "not_like"),
+        (NotInSearchFilter, True, "not_ilike"),
+    ],
+)
+@pytest.mark.parametrize("value", ["plain", "50%_/"])
+def test_search_filter_preserves_default_sql(
+    dialect: Any, filter_type: type[SearchFilter], ignore_case: bool, operator: str, value: str
+) -> None:
+    Movie = get_movie_model_for_engine("sqlite", "search_compile")
+    expected = select(Movie).where(getattr(Movie.title, operator)(f"%{value}%")).compile(dialect=dialect)
+    for search_filter in (
+        filter_type("title", value, ignore_case=ignore_case),
+        filter_type("title", value, ignore_case=ignore_case, escape_wildcards=False),
+    ):
+        compiled = search_filter.append_to_statement(select(Movie), Movie).compile(dialect=dialect)
+        assert str(compiled) == str(expected)
+        assert compiled.params == expected.params
+
+
+def test_search_filter_escapes_wildcards(session: Session, movie_model_sync: type[DeclarativeBase]) -> None:
+    """Wildcard escaping is opt-in; without it `%` and `_` in the value stay SQL wildcards.
+
+    "The_" is not a substring of any title, but `_` is a single-character wildcard in LIKE, so
+    without escaping it would match both "The Matrix" and "The Hangover".
+    """
+    Movie = movie_model_sync
+
+    # Skip mock engines
+    if getattr(session.bind.dialect, "name", "") == "mock":
+        pytest.skip("Mock engines not supported for filter tests")
+
+    # Clean any existing data first, then setup fresh data
+    if getattr(session.bind.dialect, "name", "") != "mock":
+        session.execute(Movie.__table__.delete())
+        session.commit()
+    setup_movie_data(session, Movie)
+
+    escaped = SearchFilter(field_name="title", value="The_", escape_wildcards=True)
+    results = session.execute(escaped.append_to_statement(select(Movie), Movie)).scalars().all()
+    assert len(results) == 0
+
+    unescaped = SearchFilter(field_name="title", value="The_")
+    results = session.execute(unescaped.append_to_statement(select(Movie), Movie)).scalars().all()
+    assert {movie.title for movie in results} == {"The Matrix", "The Hangover"}
+
+
+def test_not_in_search_filter_escapes_wildcards(session: Session, movie_model_sync: type[DeclarativeBase]) -> None:
+    """`NotInSearchFilter` inherits the escaping, so a literal "The_" excludes nothing."""
+    Movie = movie_model_sync
+
+    # Skip mock engines
+    if getattr(session.bind.dialect, "name", "") == "mock":
+        pytest.skip("Mock engines not supported for filter tests")
+
+    # Clean any existing data first, then setup fresh data
+    if getattr(session.bind.dialect, "name", "") != "mock":
+        session.execute(Movie.__table__.delete())
+        session.commit()
+    setup_movie_data(session, Movie)
+
+    escaped = NotInSearchFilter(field_name="title", value="The_", escape_wildcards=True)
+    results = session.execute(escaped.append_to_statement(select(Movie), Movie)).scalars().all()
+    assert len(results) == 3
+
+    unescaped = NotInSearchFilter(field_name="title", value="The_")
+    results = session.execute(unescaped.append_to_statement(select(Movie), Movie)).scalars().all()
+    assert {movie.title for movie in results} == {"Shawshank Redemption"}
+
+
+@pytest.mark.parametrize("value", ["The_", "50%", "path/", "path/%_"])
+@pytest.mark.parametrize("ignore_case", [False, True])
+@pytest.mark.parametrize("filter_type", [SearchFilter, NotInSearchFilter])
+def test_search_filter_matches_literal_characters(
+    session: Session,
+    movie_model_sync: type[DeclarativeBase],
+    value: str,
+    ignore_case: bool,
+    filter_type: type[SearchFilter],
+) -> None:
+    if getattr(session.bind.dialect, "name", "") == "mock":
+        pytest.skip("Mock engines not supported for filter tests")
+    Movie = movie_model_sync
+    session.execute(Movie.__table__.delete())
+    literal_title = f"prefix {value} suffix"
+    other_title = "unrelated title"
+    session.add_all(
+        Movie(title=title, release_date=datetime(2020, 1, 1, tzinfo=timezone.utc), genre="Drama")
+        for title in (literal_title, other_title)
+    )
+    session.flush()
+
+    search_filter = filter_type(
+        field_name="title",
+        value=value.upper() if ignore_case else value,
+        ignore_case=ignore_case,
+        escape_wildcards=True,
+    )
+    results = session.execute(search_filter.append_to_statement(select(Movie), Movie)).scalars().all()
+    expected = literal_title if filter_type is SearchFilter else other_title
+    assert [movie.title for movie in results] == [expected]
 
 
 def test_filter_group_logical_operators(session: Session, movie_model_sync: type[DeclarativeBase]) -> None:
