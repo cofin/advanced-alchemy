@@ -156,7 +156,6 @@ class ModelProtocol(Protocol):
     if TYPE_CHECKING:
         __table__: ClassVar[FromClause]
         __mapper__: ClassVar[Mapper[Any]]
-        __name__: ClassVar[str]
 
 
 def model_to_dict(instance: "ModelProtocol", exclude: Optional[set[str]] = None) -> dict[str, Any]:
