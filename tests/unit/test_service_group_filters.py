@@ -1,4 +1,4 @@
-"""Service groups share SQL and mock grid-filter behavior."""
+"""Service groups share SQL and mock field-filter behavior."""
 
 from __future__ import annotations
 
@@ -13,37 +13,37 @@ from advanced_alchemy.filters import LimitOffset, StatementFilter
 from advanced_alchemy.repository.memory import SQLAlchemyAsyncMockRepository, SQLAlchemySyncMockRepository
 from advanced_alchemy.service import ServiceGroup, SQLAlchemyAsyncRepositoryService, SQLAlchemySyncRepositoryService
 from advanced_alchemy.utils.dependencies import (
-    build_grid_filters_for_group,
+    build_field_filters,
     build_order_by_filters,
-    resolve_grid_filter_fields,
+    resolve_filter_fields,
 )
 
 pytestmark = pytest.mark.unit
 
 
-class GridBase(DeclarativeBase):
+class FieldBase(DeclarativeBase):
     pass
 
 
-class GridAuthor(GridBase):
-    __tablename__ = "group_grid_author"
+class FieldAuthor(FieldBase):
+    __tablename__ = "group_field_author"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str]
 
 
-class GridArticle(GridBase):
-    __tablename__ = "group_grid_article"
+class FieldArticle(FieldBase):
+    __tablename__ = "group_field_article"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str]
-    author_id: Mapped[int] = mapped_column(ForeignKey(GridAuthor.id))
-    author: Mapped[GridAuthor] = relationship(lazy="joined")
+    author_id: Mapped[int] = mapped_column(ForeignKey(FieldAuthor.id))
+    author: Mapped[FieldAuthor] = relationship(lazy="joined")
 
 
-def grid_filters() -> Sequence[StatementFilter]:
-    specs = resolve_grid_filter_fields({"author.name": {"eq"}}, GridArticle)
-    author_filter = build_grid_filters_for_group(specs, {specs[0].param_name: "Ada"}, rel_path=("author",))
+def field_filters() -> Sequence[StatementFilter]:
+    specs = resolve_filter_fields({"author.name": {"eq"}}, FieldArticle)
+    author_filter = build_field_filters(specs, {specs[0].param_name: "Ada"}, rel_path=("author",))
     assert isinstance(author_filter, StatementFilter)
     return [
         author_filter,
@@ -52,29 +52,29 @@ def grid_filters() -> Sequence[StatementFilter]:
     ]
 
 
-def articles(authors: Sequence[GridAuthor]) -> list[GridArticle]:
+def articles(authors: Sequence[FieldAuthor]) -> list[FieldArticle]:
     return [
-        GridArticle(id=1, title="Alpha", author=authors[0]),
-        GridArticle(id=2, title="Zulu", author=authors[0]),
-        GridArticle(id=3, title="Other", author=authors[1]),
-        GridArticle(id=4, title="Middle", author=authors[0]),
+        FieldArticle(id=1, title="Alpha", author=authors[0]),
+        FieldArticle(id=2, title="Zulu", author=authors[0]),
+        FieldArticle(id=3, title="Other", author=authors[1]),
+        FieldArticle(id=4, title="Middle", author=authors[0]),
     ]
 
 
 @pytest.mark.parametrize("use_mock", [False, True])
-def test_sync_service_group_grid_filter_parity(use_mock: bool) -> None:
-    """Related grid filtering preserves ordering and totals in a shared group."""
+def test_sync_service_group_field_filter_parity(use_mock: bool) -> None:
+    """Related field filtering preserves ordering and totals in a shared group."""
 
-    class AuthorService(SQLAlchemySyncRepositoryService[GridAuthor]):
+    class AuthorService(SQLAlchemySyncRepositoryService[FieldAuthor]):
         pass
 
-    class ArticleService(SQLAlchemySyncRepositoryService[GridArticle]):
+    class ArticleService(SQLAlchemySyncRepositoryService[FieldArticle]):
         pass
 
-    class AuthorRepo(SQLAlchemySyncMockRepository[GridAuthor]):
+    class AuthorRepo(SQLAlchemySyncMockRepository[FieldAuthor]):
         pass
 
-    class ArticleRepo(SQLAlchemySyncMockRepository[GridArticle]):
+    class ArticleRepo(SQLAlchemySyncMockRepository[FieldArticle]):
         pass
 
     if use_mock:
@@ -89,12 +89,12 @@ def test_sync_service_group_grid_filter_parity(use_mock: bool) -> None:
 
     engine = create_engine("sqlite://")
     try:
-        GridBase.metadata.create_all(engine)
+        FieldBase.metadata.create_all(engine)
         with Session(engine) as session, Group.new(session=session) as group:
             assert group.authors.repository.session is group.articles.repository.session is session
-            authors = group.authors.create_many([GridAuthor(id=1, name="Ada"), GridAuthor(id=2, name="Bob")])
+            authors = group.authors.create_many([FieldAuthor(id=1, name="Ada"), FieldAuthor(id=2, name="Bob")])
             group.articles.create_many(articles(authors))
-            items, total = group.articles.get_many_and_count(*grid_filters())
+            items, total = group.articles.get_many_and_count(*field_filters())
             assert ([item.id for item in items], total) == ([4], 3)
             assert group.authors.count() == 2
     finally:
@@ -105,19 +105,19 @@ def test_sync_service_group_grid_filter_parity(use_mock: bool) -> None:
 
 
 @pytest.mark.parametrize("use_mock", [False, True])
-async def test_async_service_group_grid_filter_parity(use_mock: bool) -> None:
-    """Async groups preserve the same related grid results as SQL and sync groups."""
+async def test_async_service_group_field_filter_parity(use_mock: bool) -> None:
+    """Async groups preserve the same related field results as SQL and sync groups."""
 
-    class AuthorService(SQLAlchemyAsyncRepositoryService[GridAuthor]):
+    class AuthorService(SQLAlchemyAsyncRepositoryService[FieldAuthor]):
         pass
 
-    class ArticleService(SQLAlchemyAsyncRepositoryService[GridArticle]):
+    class ArticleService(SQLAlchemyAsyncRepositoryService[FieldArticle]):
         pass
 
-    class AuthorRepo(SQLAlchemyAsyncMockRepository[GridAuthor]):
+    class AuthorRepo(SQLAlchemyAsyncMockRepository[FieldAuthor]):
         pass
 
-    class ArticleRepo(SQLAlchemyAsyncMockRepository[GridArticle]):
+    class ArticleRepo(SQLAlchemyAsyncMockRepository[FieldArticle]):
         pass
 
     if use_mock:
@@ -133,12 +133,12 @@ async def test_async_service_group_grid_filter_parity(use_mock: bool) -> None:
     engine = create_async_engine("sqlite+aiosqlite://")
     try:
         async with engine.begin() as connection:
-            await connection.run_sync(GridBase.metadata.create_all)
+            await connection.run_sync(FieldBase.metadata.create_all)
         async with AsyncSession(engine) as session, Group.new(session=session) as group:
             assert group.authors.repository.session is group.articles.repository.session is session
-            authors = await group.authors.create_many([GridAuthor(id=1, name="Ada"), GridAuthor(id=2, name="Bob")])
+            authors = await group.authors.create_many([FieldAuthor(id=1, name="Ada"), FieldAuthor(id=2, name="Bob")])
             await group.articles.create_many(articles(authors))
-            items, total = await group.articles.get_many_and_count(*grid_filters())
+            items, total = await group.articles.get_many_and_count(*field_filters())
             assert ([item.id for item in items], total) == ([4], 3)
             assert await group.authors.count() == 2
     finally:

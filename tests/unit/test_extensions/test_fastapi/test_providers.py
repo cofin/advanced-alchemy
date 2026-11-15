@@ -30,7 +30,7 @@ from advanced_alchemy.extensions.fastapi.providers import (
     FieldNameType,
     FilterConfig,
     FilterFieldsSpec,
-    GridOperator,
+    FilterOperator,
     _clear_request_state,  # pyright: ignore[reportPrivateUsage]
     _create_filter_aggregate_function_fastapi,  # pyright: ignore[reportPrivateUsage]
     _is_async_service_target,  # pyright: ignore[reportPrivateUsage]
@@ -1327,7 +1327,7 @@ def _serialize_fastapi_grid_filters(filters: Sequence[Any]) -> list[dict[str, An
 
 def test_fastapi_grid_filter_fields_and_sort_fields_openapi_and_parsing() -> None:
     """Verify grouped relationship filters, repeatable orderBy, 422 validation, and OpenAPI schema."""
-    ops: set[GridOperator] = {"contains", "eq"}
+    ops: set[FilterOperator] = {"contains", "eq"}
     field_spec: FilterFieldsSpec = {
         "title": ops,
         "views": {"ge", "le"},
