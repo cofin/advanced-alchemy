@@ -1184,6 +1184,20 @@ def _normalize_cache_key_value(value: Any) -> Any:
     return {"__repr__": repr(value)}  # pyright: ignore[reportUnknownArgumentType]
 
 
+def _contains_column_element(value: Any) -> bool:
+    """Return True if a filter or nested container embeds a raw SQLAlchemy expression."""
+    if isinstance(value, ColumnElement):
+        return True
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):  # pyright: ignore[reportUnknownArgumentType]
+        return any(_contains_column_element(getattr(value, field.name)) for field in dataclasses.fields(value))
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(_contains_column_element(item) for item in cast("Iterable[Any]", value))
+    if isinstance(value, dict):
+        value_map = cast("dict[object, object]", value)
+        return any(_contains_column_element(item) for item in value_map.values())
+    return False
+
+
 def _canonicalize_cache_key_value(value: Any) -> Any:
     """Convert dict-like objects into a stable, ordered representation."""
     if isinstance(value, Mapping):
@@ -1217,7 +1231,7 @@ def _build_cache_key(  # pyright: ignore[reportUnusedFunction]
     """
     normalized_filters: list[dict[str, Any]] = []
     for filter_ in filters:
-        if isinstance(filter_, ColumnElement):
+        if _contains_column_element(filter_):
             return None
         normalized_filters.append({"type": filter_.__class__.__name__, "data": _normalize_cache_key_value(filter_)})
 
