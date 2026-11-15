@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
+from litestar import Litestar, get
+from litestar.di import NamedDependency
+from litestar.params import SkipValidation
+from litestar.testing import TestClient
 from sqlalchemy import ForeignKey, create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 
-from advanced_alchemy.filters import LimitOffset, StatementFilter
+from advanced_alchemy.extensions.litestar import SQLAlchemyPlugin, SQLAlchemySyncConfig
+from advanced_alchemy.extensions.litestar.providers import create_service_dependencies
+from advanced_alchemy.filters import FilterTypes, LimitOffset, StatementFilter
 from advanced_alchemy.repository.memory import SQLAlchemyAsyncMockRepository, SQLAlchemySyncMockRepository
 from advanced_alchemy.service import ServiceGroup, SQLAlchemyAsyncRepositoryService, SQLAlchemySyncRepositoryService
 from advanced_alchemy.utils.dependencies import (
@@ -80,8 +87,8 @@ def test_sync_service_group_field_filter_parity(use_mock: bool) -> None:
     if use_mock:
         AuthorRepo.__database_clear__()
         ArticleRepo.__database_clear__()
-        AuthorService.repository_type = AuthorRepo
-        ArticleService.repository_type = ArticleRepo
+        setattr(AuthorService, "repository_type", AuthorRepo)
+        setattr(ArticleService, "repository_type", ArticleRepo)
 
     class Group(ServiceGroup):
         authors: AuthorService
@@ -104,6 +111,63 @@ def test_sync_service_group_field_filter_parity(use_mock: bool) -> None:
             ArticleRepo.__database_clear__()
 
 
+def test_litestar_group_member_field_filters(tmp_path: Path) -> None:
+    """HTTP field filters infer a group's member model and retain query aliases."""
+
+    class ArticleService(SQLAlchemySyncRepositoryService[FieldArticle]):
+        pass
+
+    class Group(ServiceGroup):
+        articles: ArticleService
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'group-filters.sqlite'}")
+    try:
+        FieldBase.metadata.create_all(engine)
+        with Session(engine) as session:
+            session.add_all(articles([FieldAuthor(id=1, name="Ada"), FieldAuthor(id=2, name="Bob")]))
+            session.commit()
+
+        @get("/articles", sync_to_thread=False)
+        def list_articles(
+            services: NamedDependency[Group], articles_filters: NamedDependency[SkipValidation[list[FilterTypes]]]
+        ) -> dict[str, list[int] | int]:
+            items, total = services.articles.get_many_and_count(*articles_filters)
+            return {"ids": [item.id for item in items], "total": total}
+
+        dependencies = create_service_dependencies(
+            Group,
+            key="services",
+            filters={
+                "articles": {
+                    "filter_fields": {"author.name": {"eq"}},
+                    "sort_fields": {"author.name", "title"},
+                    "pagination_type": "limit_offset",
+                }
+            },
+        )
+        app = Litestar(
+            [list_articles],
+            debug=True,
+            dependencies=dependencies,
+            plugins=[SQLAlchemyPlugin(SQLAlchemySyncConfig(engine_instance=engine))],
+            signature_namespace={"Group": Group},
+        )
+        with TestClient(app) as client:
+            response = client.get(
+                "/articles",
+                params={
+                    "articlesAuthorNameEq": "Ada",
+                    "articlesOrderBy": "-title",
+                    "articlesPageSize": "1",
+                    "articlesCurrentPage": "2",
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert response.json() == {"ids": [4], "total": 3}
+    finally:
+        engine.dispose()
+
+
 @pytest.mark.parametrize("use_mock", [False, True])
 async def test_async_service_group_field_filter_parity(use_mock: bool) -> None:
     """Async groups preserve the same related field results as SQL and sync groups."""
@@ -123,8 +187,8 @@ async def test_async_service_group_field_filter_parity(use_mock: bool) -> None:
     if use_mock:
         AuthorRepo.__database_clear__()
         ArticleRepo.__database_clear__()
-        AuthorService.repository_type = AuthorRepo
-        ArticleService.repository_type = ArticleRepo
+        setattr(AuthorService, "repository_type", AuthorRepo)
+        setattr(ArticleService, "repository_type", ArticleRepo)
 
     class Group(ServiceGroup):
         authors: AuthorService

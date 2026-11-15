@@ -5,6 +5,27 @@
 
 .. changelog:: 1.13.0
 
+    .. change:: coordinate shared-session services with ServiceGroup
+        :type: feature
+        :pr: 722
+
+        ``ServiceGroup`` collects annotated services on one session, with Litestar
+        and FastAPI dependency providers. Managed groups enter nested groups and
+        custom service factories, forward supported options, and unwind acquired
+        contexts with the original exception when initialization fails. Direct
+        construction binds service constructors to a caller-owned session.
+
+    .. change:: configure field filtering and sorting
+        :type: feature
+        :pr: 844
+
+        ``filter_fields`` and ``sort_fields`` configure model-aware query filters
+        and repeatable ``orderBy`` parameters in Litestar and FastAPI. Filters can
+        traverse relationships, and sorting supports dotted to-one paths. Mock
+        repositories support relationship filtering and ordering with pagination
+        totals matching SQL. The helper APIs use field-oriented names, including
+        ``FilterOperator``, ``FilterFieldSpec``, and ``resolve_filter_fields``.
+
     .. change:: preserve custom service constructors and SQL expression parity
         :type: bugfix
         :pr: 824
